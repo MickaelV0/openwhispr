@@ -999,6 +999,7 @@ declare global {
         scope: "transcription" | "reasoning";
         provider: string;
         apiKey?: string;
+        oauthConnected?: boolean;
         baseUrl?: string;
         model?: string;
         clientId?: string;
