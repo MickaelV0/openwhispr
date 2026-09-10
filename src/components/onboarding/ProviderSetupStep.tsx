@@ -267,6 +267,7 @@ function FieldLabel({ children }: { children: ReactNode }) {
 export function ByokProviderStep({
   stepId,
   selfHostedRequested = false,
+  xaiOAuthRequested = false,
   onSelfHostedChange,
   onConnectionChange,
   onProceed,
@@ -276,6 +277,8 @@ export function ByokProviderStep({
   stepId: "byok-dictation" | "byok-assistant";
   /** Set when the user picked "Self-hosted" on setup-choice rather than BYOK. */
   selfHostedRequested?: boolean;
+  /** Set when the user picked SuperGrok OAuth on setup-choice. */
+  xaiOAuthRequested?: boolean;
   onSelfHostedChange: (requested: boolean) => void;
   onConnectionChange: (connected: boolean) => void;
   onProceed: () => void;
@@ -299,8 +302,14 @@ export function ByokProviderStep({
       ),
     [assistant, policy, scope]
   );
-  const initialProvider =
+  const resumedProvider =
     providers.find((provider) => provider.id === resumeState?.selectedProvider)?.id ?? "";
+  const xaiProviderId = providers.find((provider) => provider.id === "xai")?.id ?? "";
+  const initiallySelfHosted = selfHostedRequested && selfHostedAllowed;
+  const initialProvider =
+    resumedProvider ||
+    (xaiOAuthRequested && !initiallySelfHosted ? xaiProviderId : "") ||
+    "";
   const initialProviderModels =
     providers.find((provider) => provider.id === initialProvider)?.models ?? [];
   const initialModel = initialProviderModels.some(
@@ -308,7 +317,6 @@ export function ByokProviderStep({
   )
     ? (resumeState?.selectedModel ?? "")
     : (initialProviderModels[0]?.id ?? "");
-  const initiallySelfHosted = selfHostedRequested && selfHostedAllowed;
   const [selfHosted, setSelfHosted] = useState(initiallySelfHosted);
   const [selectedProvider, setSelectedProvider] = useState(
     initiallySelfHosted ? "" : initialProvider
