@@ -633,9 +633,11 @@ export function ByokProviderStep({
               </div>
             ) : isXaiCloud ? (
               <div className="space-y-2">
-                <p className="text-xs text-[var(--onboarding-text-tertiary)]">
-                  {t("settings.speech.xaiOauth.hint")}
-                </p>
+                {!xaiOAuthConnected ? (
+                  <p className="text-xs text-[var(--onboarding-text-tertiary)]">
+                    {t("settings.speech.xaiOauth.hint")}
+                  </p>
+                ) : null}
                 <div className="flex items-center justify-between gap-2">
                   {xaiOAuthConnected ? (
                     <>
@@ -698,18 +700,20 @@ export function ByokProviderStep({
                     </Button>
                   )}
                 </div>
-                <label className="block">
-                  <FieldLabel>{t("settings.speech.xaiOauth.orApiKey")}</FieldLabel>
-                  <Input
-                    type="password"
-                    value={draftApiKey}
-                    onChange={(event) => setDraftApiKey(event.target.value)}
-                    placeholder={t("onboarding.rehaul.provider.apiKeyPlaceholder")}
-                    autoComplete="off"
-                    spellCheck={false}
-                    className={inputClass}
-                  />
-                </label>
+                {!xaiOAuthConnected ? (
+                  <label className="block">
+                    <FieldLabel>{t("settings.speech.xaiOauth.orApiKey")}</FieldLabel>
+                    <Input
+                      type="password"
+                      value={draftApiKey}
+                      onChange={(event) => setDraftApiKey(event.target.value)}
+                      placeholder={t("onboarding.rehaul.provider.apiKeyPlaceholder")}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className={inputClass}
+                    />
+                  </label>
+                ) : null}
               </div>
             ) : (
               <label className="block">
@@ -739,7 +743,12 @@ export function ByokProviderStep({
             provider: testingProvider,
             apiKey: testingKey,
             baseUrl: testingBaseUrl,
-            model: selfHosted ? draftCustomModel : selectedModel,
+            model:
+              isXaiCloud && !assistant
+                ? undefined
+                : selfHosted
+                  ? draftCustomModel
+                  : selectedModel,
             clientId: isCortiTranscription ? draftCortiClientId : undefined,
             clientSecret: isCortiTranscription ? draftCortiClientSecret : undefined,
             environment: store.cortiEnvironment,
