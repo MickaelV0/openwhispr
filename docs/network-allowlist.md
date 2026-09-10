@@ -49,6 +49,16 @@ Contacted only if the user connects Google Calendar in settings.
 | `www.googleapis.com`    | HTTPS    | 443  | Calendar event and calendar list reads.                     |
 | `openwhispr.com`        | HTTPS    | 443  | OAuth desktop callback redirect (`/auth/desktop-callback`). |
 
+## Required for SuperGrok (optional feature)
+
+Contacted only if the user signs in with Grok (subscription) or pastes a
+console.x.ai API key.
+
+| Host         | Protocol | Port | Purpose                                              |
+| ------------ | -------- | ---- | ---------------------------------------------------- |
+| `auth.x.ai`  | HTTPS    | 443  | SuperGrok OAuth authorization and token exchange.    |
+| `api.x.ai`   | HTTPS    | 443  | Grok speech-to-text and chat completions.            |
+
 ## Required for URL audio import (optional feature)
 
 Contacted only when a user pastes a URL into the Upload view to download and
@@ -75,6 +85,7 @@ provider. Skip any provider not in use.
 | `api.groq.com`                                                                   | HTTPS      | 443  | Groq API key configured.                                                                                                                                                                                                                                                                                                                                 |
 | `atc.tinfoil.sh`, `*.tinfoil.sh`                                                 | WSS, HTTPS | 443  | Tinfoil API key configured. `atc.tinfoil.sh` serves the enclave attestation bundle (verified locally against an embedded sigstore root). Inference and realtime transcription connect to an enclave host assigned dynamically at runtime (e.g. `inference.tinfoil.sh`, `router.infN.tinfoil.sh`), so allowlist `*.tinfoil.sh` rather than pinning hosts. |
 | `api.mistral.ai`                                                                 | HTTPS      | 443  | Mistral API key configured.                                                                                                                                                                                                                                                                                                                              |
+| `api.x.ai`                                                                       | HTTPS      | 443  | xAI / SuperGrok (`https://api.x.ai`). Console API key or Grok subscription.                                                                                                                                                                                                                                                                              |
 | `openrouter.ai`                                                                  | HTTPS      | 443  | OpenRouter selected as a reasoning provider (`/api/v1/models` is fetched even without a key).                                                                                                                                                                                                                                                            |
 
 ## Notes
