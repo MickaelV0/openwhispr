@@ -1,15 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  AudioLines,
-  ChevronDown,
-  Download,
-  Loader2,
-  Pause,
-  Play,
-  Plus,
-  Search,
-} from "lucide-react";
+import { AudioLines, ChevronDown, Download, Loader2, Play, Plus, Search } from "./icons";
+import { Pause } from "./icons/primitives";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -293,6 +285,7 @@ export default function XaiTtsPlayground() {
               <div className="relative mb-2">
                 <Search className="pointer-events-none absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
+                  dir="auto"
                   value={voiceQuery}
                   onChange={(event) => setVoiceQuery(event.target.value)}
                   placeholder={t("settingsPage.textToSpeech.voices.search")}
@@ -352,6 +345,7 @@ export default function XaiTtsPlayground() {
               <div className="relative mb-2">
                 <Search className="pointer-events-none absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
+                  dir="auto"
                   value={effectsQuery}
                   onChange={(event) => setEffectsQuery(event.target.value)}
                   placeholder={t("settingsPage.textToSpeech.effects.search")}
@@ -556,6 +550,7 @@ export default function XaiTtsPlayground() {
         </div>
 
         <Textarea
+          dir="auto"
           ref={textareaRef}
           value={text}
           onChange={(event) => setText(event.target.value.slice(0, MAX_TEXT_CHARS))}

@@ -70,7 +70,7 @@ class XaiOAuth {
     const nonce = crypto.randomBytes(16).toString("hex");
     return runOAuthLoopbackFlow({
       errorParam: "xai_error",
-      listenPort: XAI_OAUTH_REDIRECT_PORT,
+      ports: [XAI_OAUTH_REDIRECT_PORT],
       callbackPath: XAI_OAUTH_REDIRECT_PATH,
       pkceBytes: 64,
       requireStateToSettle: true,

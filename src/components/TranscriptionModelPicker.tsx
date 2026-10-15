@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Download, Trash2, Cloud, Lock, X, Zap, Check, CircleAlert, Loader2 } from "lucide-react";
+import { Download, Trash2, Cloud, Lock, X, Zap, Check, CircleAlert, Loader2 } from "./icons";
 import { ProviderIcon } from "./ui/ProviderIcon";
 import { ProviderTabs } from "./ui/ProviderTabs";
 import ModelCardList from "./ui/ModelCardList";
@@ -18,7 +18,6 @@ import {
   TranscriptionProviderData,
   WHISPER_MODEL_INFO,
   PARAKEET_MODEL_INFO,
-  isCohereTranscribeModel,
   isSherpaLocalProvider,
 } from "../models/ModelRegistry";
 import {
@@ -35,12 +34,19 @@ import {
   type TranscriptionPolicyContext,
 } from "../stores/policyRules";
 import { usePolicySnapshot } from "../hooks/usePolicy";
+import {
+  LOCAL_ASR_ORGANIZATIONS,
+  getASRModelOrganization,
+  getSelectedASROrganization,
+  usesParakeetManager,
+} from "../helpers/localASROrganization";
 import { STREAMING_ONLY_PROVIDERS } from "../helpers/transcriptionRoute";
 import { getRemoteProviderIcon } from "../utils/providerIcons";
 import { createExternalLinkHandler } from "../utils/externalLinks";
 import { API_ENDPOINTS, normalizeBaseUrl } from "../config/constants";
 import { GetApiKeyLink } from "./ui/GetApiKeyLink";
 import { getCachedPlatform } from "../utils/platform";
+import { pickWhisperGpuBackend } from "../utils/whisperGpuPack";
 import logger from "../utils/logger";
 import type { ParakeetCheckResult } from "../types/electron";
 
@@ -64,6 +70,7 @@ interface LocalModelCardProps {
   recommended?: boolean;
   provider: string;
   languageLabel?: string;
+  modelCardUrl?: string;
   onSelect: () => void;
   onDelete: () => void;
   onDownload: () => void;
@@ -85,6 +92,7 @@ function LocalModelCard({
   recommended,
   provider,
   languageLabel,
+  modelCardUrl,
   onSelect,
   onDelete,
   onDownload,
@@ -101,7 +109,7 @@ function LocalModelCard({
   return (
     <div
       onClick={handleClick}
-      className={`relative w-full text-left overflow-hidden rounded-md border transition-colors duration-200 group ${
+      className={`relative w-full text-start overflow-hidden rounded-md border transition-colors duration-200 group ${
         isSelected ? cardStyles.modelCard.selected : cardStyles.modelCard.default
       } ${isDownloaded && !isSelected ? "cursor-pointer" : ""}`}
     >
@@ -127,14 +135,14 @@ function LocalModelCard({
           <span className="font-semibold text-sm text-foreground truncate tracking-tight">
             {name}
           </span>
-          <span className="text-xs text-muted-foreground/50 tabular-nums shrink-0">
+          <span className="text-xs text-muted-foreground/70 tabular-nums shrink-0">
             {actualSizeMb ? `${actualSizeMb}MB` : size}
           </span>
           {recommended && (
             <span className={cardStyles.badges.recommended}>{t("common.recommended")}</span>
           )}
           {languageLabel && (
-            <span className="text-xs text-muted-foreground/50 font-medium shrink-0">
+            <span className="text-xs text-muted-foreground/70 font-medium shrink-0">
               {languageLabel}
             </span>
           )}
@@ -153,9 +161,9 @@ function LocalModelCard({
                   e.stopPropagation();
                   onDelete();
                 }}
-                size="sm"
+                size="icon"
                 variant="ghost"
-                className="h-6 w-6 p-0 text-muted-foreground/40 hover:text-destructive opacity-0 group-hover:opacity-100 transition-[color,opacity,transform] active:scale-95"
+                className="size-6 text-muted-foreground/70 hover:text-destructive opacity-0 group-hover:opacity-100 transition-[color,opacity,transform] active:scale-95"
               >
                 <Trash2 size={12} />
               </Button>
@@ -171,7 +179,7 @@ function LocalModelCard({
               variant="outline"
               className="h-6 px-2.5 text-xs text-destructive border-destructive/25 hover:bg-destructive/8"
             >
-              <X size={11} className="mr-0.5" />
+              <X size={11} className="me-0.5" />
               {isCancelling ? "..." : t("common.cancel")}
             </Button>
           ) : (
@@ -184,12 +192,26 @@ function LocalModelCard({
               variant="default"
               className="h-6 px-2.5 text-xs"
             >
-              <Download size={11} className="mr-1" />
+              <Download size={11} className="me-1" />
               {t("common.download")}
             </Button>
           )}
         </div>
       </div>
+      {modelCardUrl && (
+        <a
+          href={modelCardUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => {
+            event.stopPropagation();
+            createExternalLinkHandler(modelCardUrl)(event);
+          }}
+          className="inline-block ms-7 mb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+        >
+          {t("transcription.modelCard")}
+        </a>
+      )}
     </div>
   );
 }
@@ -314,11 +336,8 @@ const PROVIDER_CREDENTIALS: Record<
 
 const TINFOIL_AUDIO_DOCS_URL = "https://docs.tinfoil.sh/models/audio";
 
-const LOCAL_PROVIDER_TABS: Array<{ id: string; name: string; disabled?: boolean }> = [
-  { id: "whisper", name: "OpenAI" },
-  { id: "nvidia", name: "NVIDIA" },
-  { id: "cohere", name: "Cohere" },
-];
+const LOCAL_PROVIDER_TABS: Array<{ id: string; name: string; disabled?: boolean }> =
+  LOCAL_ASR_ORGANIZATIONS;
 
 interface ModeToggleProps {
   useLocalWhisper: boolean;
@@ -328,10 +347,12 @@ interface ModeToggleProps {
 function ModeToggle({ useLocalWhisper, onModeChange }: ModeToggleProps) {
   const { t } = useTranslation();
   return (
-    <div className="relative flex p-0.5 rounded-lg bg-surface-1/80 backdrop-blur-xl dark:bg-surface-1 border border-border/60 dark:border-white/8 shadow-(--shadow-metallic-light) dark:shadow-(--shadow-metallic-dark)">
+    <div className="relative flex p-0.5 rounded-lg bg-surface-1/80 backdrop-blur-xl dark:bg-surface-1 border border-border/70 dark:border-white/10 shadow-(--shadow-metallic-light) dark:shadow-(--shadow-metallic-dark)">
       <div
-        className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-md bg-card border border-border/60 dark:border-border-subtle shadow-(--shadow-metallic-light) dark:shadow-(--shadow-metallic-dark) transition-transform duration-200 ease-out ${
-          useLocalWhisper ? "translate-x-[calc(100%)]" : "translate-x-0"
+        className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-md bg-card border border-border/70 dark:border-border-subtle shadow-(--shadow-metallic-light) dark:shadow-(--shadow-metallic-dark) transition-transform duration-200 ease-out ${
+          useLocalWhisper
+            ? "translate-x-[calc(100%)] rtl:-translate-x-[calc(100%)]"
+            : "translate-x-0"
         }`}
       />
       <button
@@ -352,6 +373,49 @@ function ModeToggle({ useLocalWhisper, onModeChange }: ModeToggleProps) {
         <Lock className="w-3.5 h-3.5" />
         <span className="text-xs font-medium">{t("common.local")}</span>
       </button>
+    </div>
+  );
+}
+
+interface GpuWarningRowProps {
+  title: string;
+  description: string;
+  actionLabel: string;
+  onAction: () => void;
+  onRemove: () => void;
+  children?: ReactNode;
+}
+
+function GpuWarningRow({
+  title,
+  description,
+  actionLabel,
+  onAction,
+  onRemove,
+  children,
+}: GpuWarningRowProps) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex min-w-0 items-start gap-2">
+        <CircleAlert size={15} className="mt-0.5 shrink-0 text-warning" />
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground">{title}</p>
+          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{description}</p>
+          {children}
+          <Button onClick={onAction} size="sm" className="mt-2 h-7 px-3 text-xs">
+            {actionLabel}
+          </Button>
+        </div>
+      </div>
+      <Button
+        onClick={onRemove}
+        size="sm"
+        variant="ghost"
+        className="h-6 shrink-0 px-2 text-xs text-muted-foreground hover:text-destructive"
+      >
+        {t("gpu.remove")}
+      </Button>
     </div>
   );
 }
@@ -414,7 +478,9 @@ export default function TranscriptionModelPicker({
   const [parakeetModels, setParakeetModels] = useState<LocalModel[]>([]);
   const [parakeetCapability, setParakeetCapability] = useState<ParakeetCheckResult | null>(null);
   const [browsedCloudProvider, setBrowsedCloudProvider] = useState<string | null>(null);
-  const [internalLocalProvider, setInternalLocalProvider] = useState(selectedLocalProvider);
+  const [internalLocalProvider, setInternalLocalProvider] = useState(
+    getSelectedASROrganization(selectedLocalProvider, selectedLocalModel)
+  );
   const hasLoadedRef = useRef(false);
   const hasLoadedParakeetRef = useRef(false);
   const [gpuBackend, setGpuBackend] = useState<"cuda" | "vulkan" | null>(null);
@@ -428,17 +494,28 @@ export default function TranscriptionModelPicker({
   const [gpuDismissed, setGpuDismissed] = useState(false);
   // The pack fell back to CPU on this machine (persisted by main until retried)
   const [gpuFailed, setGpuFailed] = useState(false);
+  // The whisper-server error line main saved with that failure (#1736)
+  const [gpuFailReason, setGpuFailReason] = useState<string | null>(null);
+  // An older release installed the pack and this version can't use it (#2424)
+  const [gpuNeedsUpdate, setGpuNeedsUpdate] = useState(false);
+  // Why the last pack download failed (cleared by the next attempt)
+  const [gpuDownloadError, setGpuDownloadError] = useState<string | null>(null);
+  // The running download was started before Settings was last opened, so no
+  // pending call here will report its end: its status is polled instead
+  const [gpuResumedDownload, setGpuResumedDownload] = useState(false);
+  const gpuDownloadCancelledRef = useRef(false);
   // A server reload with the new backend is in flight (Vulkan cold starts are slow)
   const [gpuActivating, setGpuActivating] = useState(false);
   // Live truth from the running server; "active" is never inferred from a download
   const [gpuActive, setGpuActive] = useState(false);
 
   useEffect(() => {
-    if (selectedLocalProvider !== internalLocalProvider) {
-      setInternalLocalProvider(selectedLocalProvider);
+    const organization = getSelectedASROrganization(selectedLocalProvider, selectedLocalModel);
+    if (organization !== internalLocalProvider) {
+      setInternalLocalProvider(organization);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync prop→state: only re-run when the prop changes
-  }, [selectedLocalProvider]);
+  }, [selectedLocalProvider, selectedLocalModel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -464,7 +541,7 @@ export default function TranscriptionModelPicker({
     // provider must each leave the sherpa tabs on their own: moving the tab off
     // the disabled entry keeps the UI usable, while committing "whisper"
     // is what actually reroutes transcription on unsupported Macs.
-    if (isSherpaLocalProvider(internalLocalProvider)) setInternalLocalProvider("whisper");
+    if (usesParakeetManager(internalLocalProvider)) setInternalLocalProvider("whisper");
     if (isSherpaLocalProvider(selectedLocalProvider)) onLocalProviderSelect?.("whisper");
   }, [internalLocalProvider, onLocalProviderSelect, parakeetCapability, selectedLocalProvider]);
 
@@ -511,7 +588,7 @@ export default function TranscriptionModelPicker({
   const localProviderTabs = useMemo(
     () =>
       LOCAL_PROVIDER_TABS.map((provider) =>
-        isSherpaLocalProvider(provider.id) && parakeetCapability?.supported === false
+        usesParakeetManager(provider.id) && parakeetCapability?.supported === false
           ? {
               ...provider,
               disabled: true,
@@ -665,7 +742,7 @@ export default function TranscriptionModelPicker({
     if (internalLocalProvider === "whisper" && !hasLoadedRef.current) {
       hasLoadedRef.current = true;
       loadLocalModelsRef.current?.();
-    } else if (isSherpaLocalProvider(internalLocalProvider) && !hasLoadedParakeetRef.current) {
+    } else if (usesParakeetManager(internalLocalProvider) && !hasLoadedParakeetRef.current) {
       hasLoadedParakeetRef.current = true;
       loadParakeetModelsRef.current?.();
     }
@@ -687,34 +764,40 @@ export default function TranscriptionModelPicker({
     return () => window.removeEventListener("openwhispr-models-cleared", handleModelsCleared);
   }, [loadLocalModels, loadParakeetModels]);
 
+  const readGpuStatus = useCallback(async () => {
+    try {
+      const [cuda, vulkan] = await Promise.all([
+        window.electronAPI?.getCudaWhisperStatus?.(),
+        window.electronAPI?.getVulkanWhisperStatus?.(),
+      ]);
+      // No pack to show or offer hides the card. A re-read can land here after
+      // another card removed the pack this one shows, so reset, never keep it.
+      const backend = pickWhisperGpuBackend(cuda, vulkan);
+      const status = backend === "cuda" ? cuda : backend === "vulkan" ? vulkan : null;
+      setGpuBackend(backend);
+      setGpuDownloaded(!!status?.downloaded);
+      setGpuFailed(!!status?.gpuFailed);
+      setGpuFailReason(status?.gpuFailReason ?? null);
+      setGpuNeedsUpdate(!!status?.needsUpdate);
+      // A failed attempt's error must not outlive the state it was about
+      setGpuDownloadError(null);
+      // A download is still running that no pending call here may report the
+      // end of: one started before Settings was opened, or on another card
+      if (status?.downloading) {
+        setGpuDownloading(true);
+        setGpuResumedDownload(true);
+      }
+    } catch {}
+  }, []);
+
   useEffect(() => {
     if (!effectiveLocal || internalLocalProvider !== "whisper") return;
     if (getCachedPlatform() === "darwin") return;
-    const detect = async () => {
-      try {
-        const [cuda, vulkan] = await Promise.all([
-          window.electronAPI?.getCudaWhisperStatus?.(),
-          window.electronAPI?.getVulkanWhisperStatus?.(),
-        ]);
-        // Cards below the CUDA build's kernel floor (e.g. Maxwell) crash at the
-        // first kernel launch, so they get the Vulkan pack like AMD/Intel GPUs.
-        const cudaEligible = !!cuda?.gpuInfo.hasNvidiaGpu && !!cuda.gpuInfo.cudaSupported;
-        // Prefer the pack that's already installed: a working Vulkan setup must
-        // not be re-prompted to download the CUDA pack (matches the resolver,
-        // which only prefers CUDA when it is actually downloaded).
-        if (cudaEligible && (cuda.downloaded || !vulkan?.downloaded)) {
-          setGpuBackend("cuda");
-          setGpuDownloaded(cuda.downloaded);
-          setGpuFailed(!!cuda.gpuFailed);
-        } else if (vulkan?.vulkan.available) {
-          setGpuBackend("vulkan");
-          setGpuDownloaded(vulkan.downloaded);
-          setGpuFailed(!!vulkan.gpuFailed);
-        }
-      } catch {}
-    };
-    detect();
-  }, [effectiveLocal, internalLocalProvider]);
+    readGpuStatus();
+    // Retry on the fallback pop-up, or Remove on another card, changes the
+    // packs or the saved failure while this card stays mounted (#1736)
+    return window.electronAPI?.onWhisperGpuStatusChanged?.(readGpuStatus);
+  }, [effectiveLocal, internalLocalProvider, readGpuStatus]);
 
   useEffect(() => {
     if (!gpuDownloading || !gpuBackend) return;
@@ -725,9 +808,29 @@ export default function TranscriptionModelPicker({
     return subscribe?.((data) => setGpuProgress(data));
   }, [gpuDownloading, gpuBackend]);
 
+  useEffect(() => {
+    if (!gpuResumedDownload || !gpuBackend) return;
+    const id = setInterval(async () => {
+      try {
+        const status =
+          gpuBackend === "cuda"
+            ? await window.electronAPI?.getCudaWhisperStatus?.()
+            : await window.electronAPI?.getVulkanWhisperStatus?.();
+        if (!status || status.downloading) return;
+        setGpuResumedDownload(false);
+        setGpuDownloading(false);
+        setGpuDownloaded(status.downloaded);
+        setGpuFailed(!!status.gpuFailed);
+        setGpuNeedsUpdate(!!status.needsUpdate);
+      } catch {}
+    }, 1000);
+    return () => clearInterval(id);
+  }, [gpuResumedDownload, gpuBackend]);
+
   // Live server state: "GPU acceleration active" reflects what the server is
   // actually running on, not just that a pack is on disk (a crashed GPU server
   // silently falls back to CPU). Faster poll while an activation is in flight.
+  // Polls again at once when a re-read switches the card to another pack.
   useEffect(() => {
     if (!effectiveLocal || internalLocalProvider !== "whisper" || !gpuDownloaded) return;
     const poll = () => {
@@ -742,7 +845,7 @@ export default function TranscriptionModelPicker({
     poll();
     const id = setInterval(poll, gpuActivating ? 1000 : 5000);
     return () => clearInterval(id);
-  }, [effectiveLocal, internalLocalProvider, gpuDownloaded, gpuActivating]);
+  }, [effectiveLocal, internalLocalProvider, gpuDownloaded, gpuActivating, gpuBackend]);
 
   // Safety valve: a Vulkan cold start can take up to ~2 minutes (see #698);
   // past that the live status or a fallback notification settles the state.
@@ -752,12 +855,17 @@ export default function TranscriptionModelPicker({
     return () => clearTimeout(timeout);
   }, [gpuActivating]);
 
-  // Main falls back to CPU (and remembers it) when a GPU server crashes
+  // Main falls back to CPU (and remembers it) when a GPU server crashes. It
+  // saves the failure before it notifies, so the re-read shows the pack main
+  // now reports in use, exactly as reopening Settings would (#1736).
   useEffect(() => {
     const onFallback = () => {
       setGpuFailed(true);
+      // Never show the previous failure's reason while the new one loads
+      setGpuFailReason(null);
       setGpuActivating(false);
       setGpuActive(false);
+      readGpuStatus();
     };
     const disposeCuda = window.electronAPI?.onCudaFallbackNotification?.(onFallback);
     const disposeVulkan = window.electronAPI?.onGpuFallbackNotification?.(onFallback);
@@ -765,10 +873,12 @@ export default function TranscriptionModelPicker({
       disposeCuda?.();
       disposeVulkan?.();
     };
-  }, []);
+  }, [readGpuStatus]);
 
   const handleGpuDownload = async () => {
     setGpuDownloading(true);
+    setGpuDownloadError(null);
+    gpuDownloadCancelledRef.current = false;
     try {
       const result =
         gpuBackend === "cuda"
@@ -777,9 +887,12 @@ export default function TranscriptionModelPicker({
       if (result?.success) {
         setGpuDownloaded(true);
         setGpuFailed(false);
+        setGpuNeedsUpdate(false);
         // Main reloads the server with the new backend only when one is loaded;
         // otherwise the pack simply engages on the next dictation.
         setGpuActivating(!!result.willRestart);
+      } else if (result && !gpuDownloadCancelledRef.current) {
+        setGpuDownloadError(result.error ?? "");
       }
     } finally {
       setGpuDownloading(false);
@@ -800,12 +913,15 @@ export default function TranscriptionModelPicker({
     if (result?.success) {
       setGpuDownloaded(false);
       setGpuFailed(false);
+      setGpuNeedsUpdate(false);
+      setGpuDownloadError(null);
       setGpuActivating(false);
       setGpuActive(false);
     }
   };
 
   const handleGpuCancel = async () => {
+    gpuDownloadCancelledRef.current = true;
     if (gpuBackend === "cuda") await window.electronAPI?.cancelCudaWhisperDownload?.();
     else await window.electronAPI?.cancelVulkanWhisperDownload?.();
     setGpuDownloading(false);
@@ -887,8 +1003,9 @@ export default function TranscriptionModelPicker({
 
   const handleParakeetModelSelect = useCallback(
     (modelId: string) => {
-      const provider = isCohereTranscribeModel(modelId) ? "cohere" : "nvidia";
-      setInternalLocalProvider(provider);
+      const organization = getASRModelOrganization(modelId);
+      const provider = organization === "cohere" ? "cohere" : "nvidia";
+      setInternalLocalProvider(organization);
       onLocalProviderSelect?.(provider);
       onLocalModelSelect(modelId, provider);
     },
@@ -1131,9 +1248,8 @@ export default function TranscriptionModelPicker({
     [showConfirmDialog, deleteParakeetModel, t]
   );
 
-  // Both sherpa-onnx tabs share one downloaded-models list; each renders only
-  // its own vendor's registry entries.
-  const renderParakeetModels = (provider: "nvidia" | "cohere") => {
+  // Organization tabs share the sherpa-onnx inventory and installation backend.
+  const renderParakeetModels = () => {
     const modelsToRender = (
       parakeetModels.length === 0
         ? Object.entries(PARAKEET_MODEL_INFO).map(([modelId, info]) => ({
@@ -1142,7 +1258,7 @@ export default function TranscriptionModelPicker({
             size_mb: info.sizeMb,
           }))
         : parakeetModels
-    ).filter((model) => isCohereTranscribeModel(model.model) === (provider === "cohere"));
+    ).filter((model) => getASRModelOrganization(model.model) === internalLocalProvider);
 
     return (
       <div className="space-y-0.5">
@@ -1151,6 +1267,7 @@ export default function TranscriptionModelPicker({
           const info = PARAKEET_MODEL_INFO[modelId] ?? {
             name: modelId,
             description: t("transcription.fallback.parakeetModelDescription"),
+            modelCardUrl: undefined,
             size: t("common.unknown"),
             language: "en",
             recommended: false,
@@ -1170,7 +1287,8 @@ export default function TranscriptionModelPicker({
               isCancelling={isCancellingParakeetModel(modelId)}
               isInstalling={parakeetDownloads[modelId]?.phase === "installing"}
               recommended={info.recommended}
-              provider={provider}
+              provider={getASRModelOrganization(modelId)}
+              modelCardUrl={info.modelCardUrl}
               onSelect={() => handleParakeetModelSelect(modelId)}
               onDelete={() => handleParakeetDelete(modelId)}
               onDownload={() =>
@@ -1215,6 +1333,7 @@ export default function TranscriptionModelPicker({
                       {t("transcription.endpointUrl")}
                     </label>
                     <Input
+                      dir="ltr"
                       value={cloudTranscriptionBaseUrl}
                       onChange={(e) => setCloudTranscriptionBaseUrl?.(e.target.value)}
                       onBlur={handleBaseUrlBlur}
@@ -1235,6 +1354,7 @@ export default function TranscriptionModelPicker({
                       {t("common.model")}
                     </label>
                     <Input
+                      dir="ltr"
                       value={
                         selectedCloudProvider === displayedCloudProvider ? displayedCloudModel : ""
                       }
@@ -1335,6 +1455,7 @@ export default function TranscriptionModelPicker({
                           </Select>
                         ) : (
                           <Input
+                            dir="ltr"
                             value={credentialValues[field.key]}
                             onChange={(e) => credentialSetters[field.key](e.target.value)}
                             placeholder={field.placeholder}
@@ -1405,41 +1526,29 @@ export default function TranscriptionModelPicker({
             gpuBackend && (
               <div
                 className={`rounded-md border p-2.5 ${
-                  gpuDownloaded && gpuFailed
+                  (gpuDownloaded ? gpuFailed : gpuNeedsUpdate)
                     ? "border-warning/40 bg-warning/5"
                     : "border-border bg-surface-1"
                 }`}
               >
                 {gpuDownloaded ? (
                   gpuFailed ? (
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-2">
-                        <CircleAlert size={15} className="mt-0.5 shrink-0 text-warning" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-foreground">
-                            {t("gpu.activationFailed")}
-                          </p>
-                          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
-                            {t("gpu.activationFailedDescription")}
-                          </p>
-                          <Button
-                            onClick={handleGpuRetry}
-                            size="sm"
-                            className="mt-2 h-7 px-3 text-xs"
-                          >
-                            {t("gpu.retryActivation")}
-                          </Button>
-                        </div>
-                      </div>
-                      <Button
-                        onClick={handleGpuDelete}
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 shrink-0 px-2 text-xs text-muted-foreground hover:text-destructive"
-                      >
-                        {t("gpu.remove")}
-                      </Button>
-                    </div>
+                    <GpuWarningRow
+                      title={t("gpu.activationFailed")}
+                      description={t("gpu.activationFailedDescription")}
+                      actionLabel={t("gpu.retryActivation")}
+                      onAction={handleGpuRetry}
+                      onRemove={handleGpuDelete}
+                    >
+                      {gpuFailReason && (
+                        <p
+                          dir="ltr"
+                          className="mt-1 wrap-break-word font-mono text-[11px] leading-snug text-muted-foreground"
+                        >
+                          {gpuFailReason}
+                        </p>
+                      )}
+                    </GpuWarningRow>
                   ) : (
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
@@ -1476,6 +1585,14 @@ export default function TranscriptionModelPicker({
                       </Button>
                     </div>
                   )
+                ) : gpuNeedsUpdate ? (
+                  <GpuWarningRow
+                    title={t("gpu.redownloadNeeded")}
+                    description={t("gpu.redownloadNeededDescription")}
+                    actionLabel={t("gpu.redownloadButton")}
+                    onAction={handleGpuDownload}
+                    onRemove={handleGpuDelete}
+                  />
                 ) : (
                   <div className="flex items-start gap-2.5">
                     <Zap size={13} className="text-primary shrink-0 mt-0.5" />
@@ -1502,13 +1619,18 @@ export default function TranscriptionModelPicker({
                     </div>
                   </div>
                 )}
+                {!gpuDownloaded && gpuDownloadError !== null && (
+                  <p className="mt-2 text-xs leading-snug text-destructive">
+                    {t("gpu.downloadFailed")}
+                    {gpuDownloadError && ` ${gpuDownloadError}`}
+                  </p>
+                )}
               </div>
             )}
 
           <div>
             {internalLocalProvider === "whisper" && renderLocalModels()}
-            {(internalLocalProvider === "nvidia" || internalLocalProvider === "cohere") &&
-              renderParakeetModels(internalLocalProvider)}
+            {usesParakeetManager(internalLocalProvider) && renderParakeetModels()}
           </div>
         </>
       )}

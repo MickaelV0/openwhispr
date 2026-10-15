@@ -8,7 +8,7 @@ import type {
   InferenceMode,
 } from "../types/electron";
 import { Button } from "./ui/button";
-import { CircleAlert, Cloud, Loader2, Lock, Zap } from "lucide-react";
+import { CircleAlert, Cloud, Loader2, Lock, Zap } from "./icons";
 import ApiKeyInput from "./ui/ApiKeyInput";
 import ModelCardList from "./ui/ModelCardList";
 import LocalModelPicker, { type LocalProvider } from "./LocalModelPicker";
@@ -222,7 +222,7 @@ function GpuStatusBadge() {
         <button
           type="button"
           onClick={() => setError(null)}
-          className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors ms-1"
         >
           {t("gpu.dismiss")}
         </button>
@@ -290,7 +290,7 @@ function GpuStatusBadge() {
         <button
           type="button"
           onClick={handleDelete}
-          className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-auto"
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors ms-auto"
         >
           {t("gpu.remove")}
         </button>
@@ -512,10 +512,6 @@ export default function ReasoningModelSelector({
     if (!isProviderValidForMode(localReasoningProvider, inferenceMode)) {
       setLocalReasoningProvider("");
       setReasoningModel("");
-    }
-
-    if (newMode === "cloud") {
-      window.electronAPI?.llamaServerStop?.();
     }
   };
 

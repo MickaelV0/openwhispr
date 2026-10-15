@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "./icons";
 import { Button } from "./ui/button";
 import ApiKeyInput from "./ui/ApiKeyInput";
 import { GetApiKeyLink } from "./ui/GetApiKeyLink";

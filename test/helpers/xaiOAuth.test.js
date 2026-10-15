@@ -1,16 +1,17 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
-
+const crypto = require("node:crypto");
 const xaiModulePath = require.resolve("../../src/helpers/xaiOAuth.js");
 const originalLoad = Module._load;
 
-function loadXai() {
+function loadXai({ openExternal = () => {} } = {}) {
   delete require.cache[xaiModulePath];
   delete require.cache[require.resolve("../../src/helpers/oauthLoopbackFlow.js")];
+  delete require.cache[require.resolve("../../src/helpers/externalUrlOpener.js")];
   Module._load = function loadWithElectronMock(request, parent, isMain) {
     if (request === "electron") {
-      return { shell: { openExternal() {} }, net: { fetch() {} } };
+      return { shell: { openExternal } };
     }
     return originalLoad.call(this, request, parent, isMain);
   };
@@ -34,34 +35,109 @@ function memoryStore(initial = null) {
   };
 }
 
-test("SuperGrok authorize request uses xAI public client, plan, and loopback callback", () => {
-  const {
-    XAI_OAUTH_CLIENT_ID,
-    XAI_OAUTH_PLAN,
-    XAI_OAUTH_SCOPE,
-    XAI_AUTHORIZE_ENDPOINT,
-    XAI_OAUTH_REDIRECT_PORT,
-    XAI_OAUTH_REDIRECT_PATH,
-  } = loadXai();
-  const redirectUri = `http://127.0.0.1:${XAI_OAUTH_REDIRECT_PORT}${XAI_OAUTH_REDIRECT_PATH}`;
-  const params = new URLSearchParams({
-    response_type: "code",
-    client_id: XAI_OAUTH_CLIENT_ID,
-    redirect_uri: redirectUri,
-    scope: XAI_OAUTH_SCOPE,
-    code_challenge: "abc",
-    code_challenge_method: "S256",
-    state: "state",
-    nonce: "nonce",
-    plan: XAI_OAUTH_PLAN,
+test("SuperGrok completes its fixed loopback login with PKCE", async () => {
+  let resolveAuthorizeUrl;
+  const authorizeUrlOpened = new Promise((resolve) => {
+    resolveAuthorizeUrl = resolve;
   });
-  const url = `${XAI_AUTHORIZE_ENDPOINT}?${params.toString()}`;
-  assert.equal(XAI_OAUTH_PLAN, "generic");
-  assert.equal(redirectUri, "http://127.0.0.1:56121/callback");
-  assert.match(url, /plan=generic/);
-  assert.match(url, /client_id=b1a00492-073a-47ea-816f-4c329264a828/);
-  assert.match(url, /redirect_uri=http%3A%2F%2F127\.0\.0\.1%3A56121%2Fcallback/);
-  assert.match(url, /offline_access/);
+  let stored;
+  let exchangedVerifier;
+  const { XaiOAuth } = loadXai({
+    openExternal: (url) => resolveAuthorizeUrl(url),
+  });
+  const oauth = new XaiOAuth({
+    store: {
+      load: async () => null,
+      save: async (credentials) => {
+        stored = credentials;
+      },
+      clear: async () => {
+        stored = null;
+      },
+    },
+    postForm: async (_url, body) => {
+      const fields = new URLSearchParams(body);
+      assert.equal(fields.get("grant_type"), "authorization_code");
+      assert.equal(fields.get("code"), "authorization-code");
+      assert.equal(fields.get("redirect_uri"), "http://127.0.0.1:56121/callback");
+      assert.equal(fields.get("client_id"), "b1a00492-073a-47ea-816f-4c329264a828");
+      const verifier = fields.get("code_verifier");
+      exchangedVerifier = verifier;
+      assert.match(verifier, /^[A-Za-z0-9_-]{86}$/);
+      assert.equal(
+        fields.get("code_challenge"),
+        crypto.createHash("sha256").update(verifier).digest("base64url")
+      );
+      assert.equal(fields.get("code_challenge_method"), "S256");
+      return {
+        access_token: "access-token",
+        refresh_token: "refresh-token",
+        expires_in: 3600,
+        scope: "api:access",
+      };
+    },
+  });
+
+  let authorizeUrl;
+  let flow;
+  let settled = false;
+  try {
+    flow = oauth.startOAuthFlow();
+    flow
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => {});
+    authorizeUrl = new URL(
+      await Promise.race([
+        authorizeUrlOpened,
+        flow.then(
+          () => Promise.reject(new Error("OAuth flow settled before opening the authorize URL")),
+          (error) => Promise.reject(error)
+        ),
+      ])
+    );
+    assert.equal(
+      `${authorizeUrl.origin}${authorizeUrl.pathname}`,
+      "https://auth.x.ai/oauth2/authorize"
+    );
+    assert.equal(
+      authorizeUrl.searchParams.get("client_id"),
+      "b1a00492-073a-47ea-816f-4c329264a828"
+    );
+    assert.equal(authorizeUrl.searchParams.get("plan"), "generic");
+    assert.equal(authorizeUrl.searchParams.get("redirect_uri"), "http://127.0.0.1:56121/callback");
+    assert.match(authorizeUrl.searchParams.get("code_challenge"), /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(authorizeUrl.searchParams.get("code_challenge_method"), "S256");
+    assert.match(authorizeUrl.searchParams.get("scope"), /\boffline_access\b/);
+
+    const callbackUrl = new URL(authorizeUrl.searchParams.get("redirect_uri"));
+    callbackUrl.searchParams.set("code", "authorization-code");
+    callbackUrl.searchParams.set("state", authorizeUrl.searchParams.get("state"));
+    const response = await fetch(callbackUrl, { redirect: "manual" });
+    assert.equal(response.status, 302);
+
+    const result = await flow;
+    assert.deepEqual(result, {
+      connected: true,
+      expiresAt: stored.expires_at,
+      scope: "api:access",
+    });
+    assert.equal(stored.access_token, "access-token");
+    assert.equal(stored.refresh_token, "refresh-token");
+    assert.equal(
+      authorizeUrl.searchParams.get("code_challenge"),
+      crypto.createHash("sha256").update(exchangedVerifier).digest("base64url")
+    );
+  } finally {
+    if (!settled && authorizeUrl) {
+      const callbackUrl = new URL(authorizeUrl.searchParams.get("redirect_uri"));
+      callbackUrl.searchParams.set("code", "cleanup");
+      callbackUrl.searchParams.set("state", authorizeUrl.searchParams.get("state"));
+      await fetch(callbackUrl, { redirect: "manual" }).catch(() => {});
+      await flow.catch(() => {});
+    }
+  }
 });
 
 test("exchange posts authorization_code with PKCE challenge", async () => {

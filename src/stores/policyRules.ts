@@ -84,6 +84,36 @@ export function effectiveLocalHistoryEnabled(
   return lockedLocalHistoryValue(state) ?? personalPreference;
 }
 
+/**
+ * Whether the managed policy that can force local history off has settled.
+ *
+ * `effectiveLocalHistoryEnabled` resolves an unsettled policy to the user's own
+ * preference, which is the right value to show and to sweep retention with --
+ * but it is a default, not an answer, and one consumer reads that switch as
+ * consent: the main process reconstructs Insights history from stored
+ * transcripts the first time the renderer reports it. A scan finishes in
+ * milliseconds while the policy is a network round trip, so a workspace with
+ * `localHistoryMode: "always_off"` would have its members' existing transcripts
+ * mined before the policy forbidding it ever arrived.
+ *
+ * `idle` is unsettled here even though `isPolicyActionAllowed` treats it as
+ * permissive, because it covers both "no account" and "signed in, fetch not
+ * started". Only the main process can tell those apart, from the account scope
+ * it persists, so it makes that call.
+ */
+export function isLocalHistoryPolicyResolved(state: PolicyDecisionSnapshot): boolean {
+  return state.status === "managed" || state.status === "unmanaged";
+}
+
+/**
+ * Whether this window has applied whatever policy it will get. `idle` and
+ * `loading` may still be a signed-in window before its fetch lands, while
+ * `error` applies no policy and is as final as `managed` or `unmanaged`.
+ */
+export function isPolicySettled(state: PolicyDecisionSnapshot): boolean {
+  return state.status !== "idle" && state.status !== "loading";
+}
+
 /** The org-forced local history value, or null when the user may choose. */
 export function lockedLocalHistoryValue(state: PolicyDecisionSnapshot): boolean | null {
   const mode = managedPolicy(state)?.dataRetention.localHistoryMode;
@@ -173,12 +203,39 @@ export function isWebSearchAllowed(state: PolicyDecisionSnapshot): boolean {
   return managedPolicyDecision(state, (policy) => policy.features.webSearchEnabled);
 }
 
+/** Whether a resolved org policy turned web search off (not one still loading). */
+export function isWebSearchBlockedByOrg(state: PolicyDecisionSnapshot): boolean {
+  return state.status === "managed" && isPolicyActionAllowed(state) && !isWebSearchAllowed(state);
+}
+
 /**
  * Whether the voice agent may attach screen context. Servers that predate the
  * field send none; absent means allowed.
  */
 export function isScreenContextAllowed(state: PolicyDecisionSnapshot): boolean {
   return managedPolicyDecision(state, (policy) => policy.features.screenContextEnabled !== false);
+}
+
+/**
+ * Whether agent connectors may run. They are agent tools, so turning the
+ * agent off turns them off too. Servers that predate the field send none;
+ * absent means allowed.
+ */
+export function isConnectorsAllowed(state: PolicyDecisionSnapshot): boolean {
+  return managedPolicyDecision(
+    state,
+    (policy) => policy.features.agentEnabled && policy.features.connectorsEnabled !== false
+  );
+}
+
+/**
+ * Whether a resolved org policy turned connectors off. Unlike
+ * isConnectorsAllowed, a policy that is still loading or failed to load is not
+ * reported as an org decision, and neither is one that only requires a newer
+ * app version (the update banner says that).
+ */
+export function isConnectorsBlockedByOrg(state: PolicyDecisionSnapshot): boolean {
+  return state.status === "managed" && isPolicyActionAllowed(state) && !isConnectorsAllowed(state);
 }
 
 const warnedUnknownRequiredModelIds = new Set<string>();
@@ -426,6 +483,8 @@ export function isShareActionAllowed(
   }
   if (action === "create-link") return isShareVisibilityAllowed(state, "link");
   if (action === "set-domain") return isShareVisibilityAllowed(state, "domain");
+  // A private note suspends its invitations and has no link for the email to carry.
+  if (action === "resend-invitation" && currentVisibility === "private") return false;
   return isShareVisibilityAllowed(state, "invited");
 }
 

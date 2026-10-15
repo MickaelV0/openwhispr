@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { PermissionGuideId } from "../../types/permissionGuide";
 import {
   LEGACY_ONBOARDING_STEP_KEY,
   ONBOARDING_SESSION_KEY,
@@ -78,6 +79,14 @@ export function useOnboardingSession() {
     setSession((current) => ({ ...current, xaiOAuthRequested }));
   }, []);
 
+  const setScreenContextRequested = useCallback((screenContextRequested: boolean) => {
+    setSession((current) => ({ ...current, screenContextRequested }));
+  }, []);
+
+  const setPermissionGuide = useCallback((permissionGuide: PermissionGuideId | null) => {
+    setSession((current) => ({ ...current, permissionGuide }));
+  }, []);
+
   const clearSession = useCallback(() => {
     localStorage.removeItem(ONBOARDING_SESSION_KEY);
     localStorage.removeItem(LEGACY_ONBOARDING_STEP_KEY);
@@ -92,6 +101,8 @@ export function useOnboardingSession() {
     setSetupMode,
     setSelfHostedRequested,
     setXaiOAuthRequested,
+    setScreenContextRequested,
+    setPermissionGuide,
     clearSession,
   };
 }
